@@ -263,12 +263,12 @@ def fly_through_gates(pio: Pioneer, cam: Camera):
 
 def main():
     args = sys.argv[1:]
-    if len(args) < 2:
+    if len(args) < 3:
         print("Использование: python gates_aruco.py <mavlink_port> <camera_port>")
         sys.exit(1)
 
-    pioneer = Pioneer(ip="127.0.0.1", mavlink_port=int(args[0]))
-    camera = Camera(ip="127.0.0.1", port=int(args[1]))
+    pioneer = Pioneer(ip=args[0], mavlink_port=int(args[1]))
+    camera = Camera(ip=args[0], port=int(args[2]))
 
     # В этом скрипте поток один — управление и обработка кадров вместе.
     # Если нужно — можно вынести get_cv_frame() в отдельный поток.
