@@ -61,6 +61,20 @@ EMA_AREA = 0.5                # сглаживание площади
 # Сколько ворот пройти (None — бесконечно)
 MAX_GATES = None
 
+
+
+# ---- ЖЁСТКИЕ ПАРАМЕТРЫ ДЕТЕКТОРА (под твой свет) ----
+H_DIST   = 7          # допуск по тону вокруг зелёного (~60°)
+S_MIN    = 16         # мин. насыщенность
+V_MIN    = 205        # мин. яркость
+G_MARGIN = 69         # G > R и G > B на не меньше чем это число
+G_RATIO  = 1.90       # (G)/(R+B) >= 1.90
+ROI_FRAC = 0.80       # доля кадра для центрального окна поиска (0..1)
+
+SHOW_MASKS = True     # оставить отладочные окна масок (можно False)
+MORPH_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+
+
 # -------------------- ОБЩЕЕ СОСТОЯНИЕ --------------------
 
 stop_event = threading.Event()
@@ -143,48 +157,45 @@ def calibrate_yaw_sign(pioneer, get_ex, timeout=2.0):
 
 # -------------------- ДЕТЕКЦИЯ --------------------
 
-def detect_green_gate(frame, params):
+def detect_green_gate(frame):
     """
     Возвращает (det|None, masks):
       det = {cx, cy, angle_rad, norm_area, contour}
       masks = {"huedist", "hsv_basic", "gdom", "or", "proc"}
     """
     H, W = frame.shape[:2]
-    roi_frac = float(params["ROI_frac"])
 
-    # --- Hue-distance к «зелёному» (~60 градусов), + пороги по S/V ---
+    # --- Hue-distance к зелёному (~60°), + пороги по S/V ---
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     h, s, v = cv2.split(hsv)
-    # круговая дистанция по тону
     dh = np.abs(h.astype(np.int16) - 60)
     dh = np.minimum(dh, 180 - dh).astype(np.uint8)
-    mask_h = (dh <= params["H_dist"]).astype(np.uint8) * 255
-    mask_s = (s >= params["S_min"]).astype(np.uint8) * 255
-    mask_v = (v >= params["V_min"]).astype(np.uint8) * 255
+    mask_h = (dh <= H_DIST).astype(np.uint8) * 255
+    mask_s = (s >= S_MIN).astype(np.uint8) * 255
+    mask_v = (v >= V_MIN).astype(np.uint8) * 255
     hsv_basic = cv2.bitwise_and(mask_h, cv2.bitwise_and(mask_s, mask_v))
 
-    # --- Доминирование G в BGR (помогает при низкой S из-за блика) ---
+    # --- Доминирование зелёного в BGR ---
     b, g, r = cv2.split(frame)
     ratio = (g.astype(np.float32) + 1.0) / (r.astype(np.float32) + b.astype(np.float32) + 1.0)
-    gdom_bool = ((g > r + params["G_margin"]) & (g > b + params["G_margin"])) | (ratio >= params["G_ratio"])
+    gdom_bool = ((g > r + G_MARGIN) & (g > b + G_MARGIN)) | (ratio >= G_RATIO)
     gdom = (gdom_bool.astype(np.uint8) * 255)
 
-    # --- Комбинация: достаточно одного признака (OR), чтобы не «терять» блеклый зелёный ---
+    # --- Объединяем признаки ---
     comb_or = cv2.bitwise_or(hsv_basic, gdom)
 
     # --- Центральный ROI ---
-    cw, ch = int(W * roi_frac), int(H * roi_frac)
+    cw, ch = int(W * ROI_FRAC), int(H * ROI_FRAC)
     x0, y0 = (W - cw) // 2, (H - ch) // 2
     roi = np.zeros_like(comb_or); roi[y0:y0+ch, x0:x0+cw] = 255
     proc = cv2.bitwise_and(comb_or, roi)
 
     # --- Морфология ---
-    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7,7))
     proc = cv2.medianBlur(proc, 5)
-    proc = cv2.morphologyEx(proc, cv2.MORPH_CLOSE, k, iterations=2)
-    proc = cv2.dilate(proc, k, iterations=1)
+    proc = cv2.morphologyEx(proc, cv2.MORPH_CLOSE, MORPH_KERNEL, iterations=2)
+    proc = cv2.dilate(proc, MORPH_KERNEL, iterations=1)
 
-    # --- Контур и геометрия ворот ---
+    # --- Контуры и выбор ворот ---
     cnts, _ = cv2.findContours(proc, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not cnts:
         return None, {"huedist": mask_h, "hsv_basic": hsv_basic, "gdom": gdom, "or": comb_or, "proc": proc}
@@ -192,7 +203,7 @@ def detect_green_gate(frame, params):
     best, best_score = None, -1.0
     for cnt in cnts:
         area = cv2.contourArea(cnt)
-        if area < 0.001 * W * H:  # мусор
+        if area < 0.001 * W * H:
             continue
         (cx, cy), (rw, rh), ang = cv2.minAreaRect(cnt)
         if rw < 10 or rh < 10:
@@ -211,19 +222,22 @@ def detect_green_gate(frame, params):
         return None, {"huedist": mask_h, "hsv_basic": hsv_basic, "gdom": gdom, "or": comb_or, "proc": proc}
 
     cx, cy, rw, rh, ang, cnt, rect_area_norm = best
-    if ang < -45: ang += 90.0
-    det = dict(cx=float(cx), cy=float(cy),
-               angle_rad=float(np.deg2rad(ang)),
-               norm_area=float(rect_area_norm),
-               contour=cnt)
+    if ang < -45:
+        ang += 90.0
+    det = dict(
+        cx=float(cx), cy=float(cy),
+        angle_rad=float(np.deg2rad(ang)),
+        norm_area=float(rect_area_norm),
+        contour=cnt
+    )
     return det, {"huedist": mask_h, "hsv_basic": hsv_basic, "gdom": gdom, "or": comb_or, "proc": proc}
+
 
 
 
 # -------------------- ПОТОК КАМЕРЫ --------------------
 
 def camera_stream(camera: Camera):
-    setup_tuner()
     ex_f = ey_f = area_f = None
 
     while not stop_event.is_set():
@@ -232,8 +246,7 @@ def camera_stream(camera: Camera):
             if cv2.waitKey(1) == 27: stop_event.set()
             continue
 
-        params = read_tuner()
-        det, masks = detect_green_gate(frame, params)
+        det, masks = detect_green_gate(frame)  # ← без params
 
         h, w = frame.shape[:2]
         with vision.lock:
@@ -266,8 +279,8 @@ def camera_stream(camera: Camera):
 
         cv2.imshow("Socket Camera", vis)
         if SHOW_MASKS:
-            cv2.imshow("Mask HueDist",  masks["huedist"])
-            cv2.imshow("Mask HSV basic",masks["hsv_basic"])
+            cv2.imshow("Mask HueDist", masks["huedist"])
+            cv2.imshow("Mask HSV basic", masks["hsv_basic"])
             cv2.imshow("Mask G-dominance", masks["gdom"])
             cv2.imshow("Mask OR (Hue|G)", masks["or"])
             cv2.imshow("Mask proc (ROI+morph)", masks["proc"])
