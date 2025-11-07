@@ -64,12 +64,12 @@ MAX_GATES = None
 
 
 # ---- ЖЁСТКИЕ ПАРАМЕТРЫ ДЕТЕКТОРА (под твой свет) ----
-H_DIST   = 17          # допуск по тону вокруг зелёного (~60°)
-S_MIN    = 160         # мин. насыщенность
-V_MIN    = 64        # мин. яркость
-G_MARGIN = 67         # G > R и G > B на не меньше чем это число
-G_RATIO  = 245       # (G)/(R+B) >= 1.90
-ROI_FRAC = 73       # доля кадра для центрального окна поиска (0..1)
+H_DIST   = 15          # допуск по тону вокруг зелёного (~60°)
+S_MIN    = 45         # мин. насыщенность
+V_MIN    = 73       # мин. яркость
+G_MARGIN = 44         # G > R и G > B на не меньше чем это число
+G_RATIO  = 1.9      # (G)/(R+B) >= 1.90
+ROI_FRAC = 0.8       # доля кадра для центрального окна поиска (0..1)
 
 SHOW_MASKS = True     # оставить отладочные окна масок (можно False)
 MORPH_KERNEL = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
@@ -317,13 +317,28 @@ def pioneer_control(pioneer: Pioneer):
             return (vision.cx - w/2) / (w/2)
 
     # Автокалибровка знака yaw (1–2 кадра)
-    yaw_sign = calibrate_yaw_sign(pioneer, get_ex_from_vision)
+    # 1) дождёмся появления цели (до 3 с)
+    yaw_sign = +1
+    t0 = time.time()
+    ex0 = None
+    while time.time() - t0 < 3.0:
+        ex0 = get_ex_from_vision()
+        if ex0 is not None:
+            break
+        pioneer.set_manual_speed_body_fixed(0, 0, 0, 0)
+        time.sleep(0.05)
+
+    # 2) если цель есть — калибруемся импульсом, иначе используем +1 и поправим «на лету»
+    if ex0 is not None:
+        yaw_sign = calibrate_yaw_sign(pioneer, get_ex_from_vision)
 
     state, pass_until = "ALIGN", 0.0
     dt = 1.0 / CMD_HZ
     last_seen = time.time()
 
     try:
+        ex_prev = None
+        bad_count = 0
         while not stop_event.is_set():
             now = time.time()
             with vision.lock:
@@ -348,6 +363,14 @@ def pioneer_control(pioneer: Pioneer):
                     state = "ALIGN"
 
             if has:
+                if ex_prev is not None:
+                    # если крутимся (|yaw_rate| заметный) и |ex| стабильно растёт — меняем знак
+                    going_wrong = (abs(ex) > 0.06) and (abs(ex) > abs(ex_prev) + 0.01) and (abs(yaw_rate) > 0.1)
+                    bad_count = bad_count + 1 if going_wrong else 0
+                    if bad_count >= 5:  # ~0.15–0.25 c при 30 Гц
+                        yaw_sign *= -1
+                        bad_count = 0
+                ex_prev = ex
                 # 1) крутимся так, чтобы gate был по центру по X
                 yaw_rate = float(np.clip(yaw_sign * KP_YAW_EX * ex, -YAW_MAX, YAW_MAX))
 
