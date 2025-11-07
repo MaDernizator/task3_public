@@ -329,7 +329,7 @@ def pioneer_control(pioneer: Pioneer):
 
             if state == "PASS":
                 if now < pass_until:
-                    # pioneer.set_manual_speed_body_fixed(0.0, PASS_BURST_VY, 0.0, 0.0)
+                    pioneer.set_manual_speed_body_fixed(0.0, PASS_BURST_VY, 0.0, 0.0)
                     time.sleep(dt); continue
                 else:
                     state = "ALIGN"
@@ -352,18 +352,15 @@ def pioneer_control(pioneer: Pioneer):
                 if ready:
                     state = "PASS"
                     pass_until = now + PASS_BURST_T
-                    # pioneer.set_manual_speed_body_fixed(0.0, PASS_BURST_VY, 0.0, 0.0)
+                    pioneer.set_manual_speed_body_fixed(0.0, PASS_BURST_VY, 0.0, 0.0)
                 else:
-                    pass
-                    # pioneer.set_manual_speed_body_fixed(vx, vy, vz, yaw_rate)
+                    pioneer.set_manual_speed_body_fixed(vx, vy, vz, yaw_rate)
             else:
                 # цели нет
                 if (now - last_seen) > NO_DET_HOLD_T:
-                    pass
-                    # pioneer.set_manual_speed_body_fixed(0, 0, 0, 0)
+                    pioneer.set_manual_speed_body_fixed(0, 0, 0, 0)
                 else:
-                    pass
-                    # pioneer.set_manual_speed_body_fixed(0, FWD_MIN * 0.5, 0, 0)
+                    pioneer.set_manual_speed_body_fixed(0, FWD_MIN * 0.5, 0, 0)
 
             time.sleep(dt)
     except KeyboardInterrupt:
