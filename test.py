@@ -46,8 +46,8 @@ def main():
         )
         exit(1)
 
-    pioneer = Pioneer(ip="127.0.0.1", mavlink_port=int(args[0]))
-    pioneer_camera = Camera(ip="127.0.0.1", port=int(args[1]))
+    pioneer = Pioneer(ip=args[0], mavlink_port=int(args[1]))
+    pioneer_camera = Camera(ip=args[0], port=int(args[2]))
 
 
     camera_thread = threading.Thread(target=camera_stream, args=(pioneer_camera,))
